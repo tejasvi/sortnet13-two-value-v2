@@ -1,0 +1,175 @@
+# Sorting networks on 13 inputs need at least 44 comparators: a Lean proof
+
+This Lean 4 project proves that every sorting network on 13 channels has at least 44 comparators,
+assuming Harder's bound `S(11) ≥ 35` as an explicit hypothesis. It formalizes the argument of
+T. S. Tomar, *Sorting networks on 13 inputs need at least 44 comparators*, version 2 (Zenodo,
+doi:10.5281/zenodo.23463979; all versions: doi:10.5281/zenodo.23453292): the two-value pruning lemma
+`S(N) ≥ S(N-2) + P(2,N)` and the computation `P(2,13) ≥ 9`.
+
+## The statement
+
+`S13/Defs.lean` uses only Lean's core library:
+
+```lean
+structure Comparator (n : Nat) where      -- min to channel i, max to channel j
+  i : Fin n
+  j : Fin n
+  lt : i < j
+
+def Comparator.apply (c : Comparator n) (v : Fin n → Nat) : Fin n → Nat :=
+  fun k => if k = c.i then min (v c.i) (v c.j) else if k = c.j then max (v c.i) (v c.j) else v k
+
+abbrev Network (n : Nat) := List (Comparator n)
+
+def Network.eval (net : Network n) (v : Fin n → Nat) : Fin n → Nat :=
+  net.foldl (fun w c => c.apply w) v
+
+def Network.Sorts (net : Network n) : Prop :=
+  ∀ v : Fin n → Nat, ∀ a b : Fin n, a ≤ b → net.eval v a ≤ net.eval v b
+
+def MainStatement : Prop :=
+  (∀ net : Network 11, net.Sorts → 35 ≤ net.length) →
+    ∀ net : Network 13, net.Sorts → 44 ≤ net.length
+```
+
+and `S13/Main.lean` proves
+
+```lean
+theorem Sortnet.main_theorem : MainStatement
+theorem Sortnet.main_theorem_01 (h11 : ∀ net : Network 11, net.Sorts01 → 35 ≤ net.length) :
+    ∀ net : Network 13, net.Sorts01 → 44 ≤ net.length
+```
+
+`Sorts` asks for sorting of every vector of natural numbers; `S13/ZeroOne.lean` proves the 0-1
+principle (`Network.sorts_iff_sorts01`), so `main_theorem_01` is the same result with sorting defined
+on 0-1 inputs.
+
+**Two kinds of comparators.** The statement uses standard comparators `(i, j)` with `i < j` (min to
+`i`, max to `j`): this is Knuth's model, in which `S(11) = 35` and the table values are stated. The
+quantities `W(x,y)` and `P(2,n)` are defined for generalized comparators `(lo, hi)` in either order,
+because the paper defines them for acyclic circuits, and pruning a standard network produces a
+generalized one. `S13/Untangle.lean` proves that a generalized network that sorts with respect to some
+fixed order of its outputs untangles into a standard sorting network with the same number of
+comparators, so nothing is lost in either direction.
+
+The hypothesis is implied by Harder's bound as verified in Isabelle/HOL. In Harder's repository
+https://github.com/jix/sortnetopt (commit `0b5d09c`), `checker/verified/Sorting_Network_Bound.thy`
+defines `lower_size_bound n k`: every list of comparators that sorts all 0-1 sequences of length `n`
+has at least `k` comparators, where a comparator is any pair `(i, j)` of natural numbers and puts the
+minimum on `i` and the maximum on `j` (so both orientations occur). The lemma
+`check_proof_get_bound_spec` in `checker/verified/Checker.thy` states that if the verified checking
+function accepts a certificate with width `n` and bound `k`, then `lower_size_bound n k`. Harder
+reports that his certificate (doi:10.5281/zenodo.4108365) is accepted with width 11 and bound 35;
+the certificate parser is not verified. A standard network that sorts all natural-number inputs sorts all 0-1
+inputs, so `lower_size_bound 11 35` implies the hypothesis of `main_theorem`.
+
+## Structure of the proof
+
+| file | content |
+|---|---|
+| `S13/Defs.lean` | standard networks, `Sorts`, `MainStatement`; generalized comparators `(lo, hi)`, `runInput`, `W(x,y)` (`GNetwork.W`, a list of comparator positions), `Top2Correct`, `P2AtLeast n L` |
+| `S13Comp.lean` | the computation, core Lean only, compiled to native code (`precompileModules`): concrete states, `stepC`, `pullC`, `phiC`, the check `checkAll`, and the untrusted search `search` with relabeling by colour refinement `canonPerm` |
+| `S13/FState.lean` | abstract states, the Kraft potential `Phi` (never decreases: `phi_le_phi_fstep`; at most `2^L` at a goal: `phi_le_of_good`), relabeling (`feasIn_pull`), orientation (`fstep_swap`), `closure_sound` |
+| `S13/CheckSound.lean` | the concrete operations compute the abstract ones; `checkAll_sound`; `not_feasible_of_fullCheck` |
+| `S13/Runs.lean` | runs and `W(x,y)` (`config_run`, `W_length`); states represent runs; `p2AtLeast_of_not_feasible` |
+| `S13/P2_13.lean` | `fullCheck_13_8 : Comp.fullCheck 13 8 = true` (by `native_decide`) and `P2_13 : P2AtLeast 13 9` |
+| `S13/Untangle.lean` | untangling of generalized networks (Knuth, Exercise 5.3.4-16); `exists_sorts_of_sortsBy` |
+| `S13/Prune.lean` | two-value pruning: `prune` |
+| `S13/Reduction.lean` | `top2_of_sorts`, `mainStatement_of_P2 : P2AtLeast 13 9 → MainStatement` |
+| `S13/ZeroOne.lean` | the 0-1 principle |
+| `S13/Main.lean` | `main_theorem`, `main_theorem_01` |
+| `S13/Validate.lean` | `p2_values`: `P(2,N) = 3, 4, 6, 6, 7, 7, 8, 8, 8, 9, 9` for `N = 3..13` (generated by `scripts/gen_validate.py`) |
+| `S13/Axioms.lean` | prints the axioms of the main results |
+
+### The computation
+
+A *state* records, for each pair of channels `(p, q)`, the largest number of comparators met so far
+by a run with the largest value on `p` and the second largest on `q` (or no entry). A top-two correct
+network with all `|W(x,y)| ≤ L` leads from the start state (cost 0 at every pair `p ≠ q`) to a state
+with one entry, of cost at most `L`. Proved facts about one comparator step:
+
+* the potential `Φ(f) = ∑_p R(∑_{q ≠ p} 2^f(p,q))` (`R s` = least power of two `≥ s`, `R 0 = 0`)
+  never decreases, and `Φ ≤ 2^L` at a goal;
+* relabeling the channels by a permutation preserves the existence of a continuation of each length;
+* the two orientations of a comparator give states that differ by a transposition, so comparators
+  with `lo < hi` suffice.
+
+`closure_sound`: if a set `H` of states contains no goal and every comparator `lo < hi` takes each
+state of `H` to the same state, to a state with `Φ > 2^L`, or to a state with a relabeling in `H`,
+then no state of `H` reaches a goal. `Comp.search` (not trusted) proposes `H`; for `N = 13`, `L = 8`
+it has 138,537 states. `Comp.checkAll` verifies the conditions, and `Comp.fullCheck 13 8` also
+checks that `H` contains the start state.
+
+## Trust base
+
+```
+'Sortnet.main_theorem' depends on axioms: [propext, Classical.choice, Quot.sound,
+ fullCheck_13_8._native.native_decide.ax_1_1]
+axiom Sortnet.fullCheck_13_8._native.native_decide.ax_1_1 : decide (Comp.fullCheck 13 8 = true) = true
+```
+
+`native_decide` (Lean 4.35: `Lean.Meta.nativeEqTrue`) compiles and runs `Comp.fullCheck 13 8` and
+records the result as the axiom above. So the proof trusts Lean's kernel, Lean's compiler, the C
+compiler and the runtime on this one computation, and the hypothesis `S(11) ≥ 35`. The search and
+the relabeling heuristic only propose `H`; an error in them (in source or compilation) can make the
+check fail but not succeed wrongly. The result depends on the compiled checking function (about 50
+lines in `S13Comp.lean`) and the parts of the core library it calls (arrays, `Nat`, `Std.HashSet`).
+
+All other theorems use only the standard axioms: `prune`, `mainStatement_of_P2`, `checkAll_sound`
+and `p2AtLeast_of_not_feasible` depend on `[propext, Classical.choice, Quot.sound]`;
+`Network.sorts_iff_sorts01` and the upper bounds `p2_upper_N` (checked by kernel `decide`) on
+`[propext, Quot.sound]`. Full output: `logs/axioms.txt`; build logs `logs/p2_13_build.log` and `logs/full_build.log`.
+
+## Building and checking
+
+Requirements: [elan](https://github.com/leanprover/elan) (installs the toolchain in
+`lean-toolchain`, `leanprover/lean4:v4.35.0-rc3`), a C toolchain is not needed (Lean ships one),
+about 8 GB of disk for Mathlib.
+
+```
+lake exe cache get          # download the Mathlib build for the pinned revision
+lake build                  # builds S13 (main theorem and validation)
+lake build S13.Axioms       # prints #print axioms for the main results
+```
+
+`lake build S13.Main` builds only the main theorem. The library `S13Comp` is precompiled to a shared
+library, so `native_decide` runs native code; without precompilation Lean's interpreter is about 100
+times slower.
+
+Timings (one core of a shared AMD EPYC 9B45 machine, load about 1.3 per core):
+
+| step | wall time | memory |
+|---|---|---|
+| `S13.P2_13` (`native_decide`, `N = 13`, `L = 8`, 138,537 states) | 357 s | 2.0 GB |
+| `S13.Validate` (lower bounds `N = 3..12`, dominated by `N = 12`: 335,509 states) | 582 s | 2.4 GB |
+| all other modules | under 10 s each | |
+
+A fresh clone on the same machine (`git clone`, `lake exe cache get`, `lake build`,
+`lake build S13.Axioms`) took 137 s for the cache, 903 s for the build (P2_13 303 s, Validate 584 s) and
+printed the same axioms (`logs/fresh_clone_build.log`).
+
+## Validation
+
+* `p2_values` (`S13/Validate.lean`): the same check gives the lower bounds `P(2,N) ≥ P` for
+  `N = 3..12`, and explicit standard networks (from the clean-room verification of the paper) give
+  the upper bounds `P(2,N) ≤ P` for `N = 3..13`, with top-two correctness and costs checked by kernel
+  `decide`.
+* `crosscheck/CrossCheck.lean` and `scripts/crosscheck.py`: on random and exhaustively enumerated
+  networks with `3 ≤ N ≤ 8`, the Lean definitions (`Top2Correct` decided, `W(x,y)` from `runInput`,
+  and the state step `Comp.stepC`) agree with the Python simulator `sim.py` and the state step of
+  `bf2.cpp` of the clean-room verification (`scripts/bf2_fstate.cpp`): 117,200 networks (71,214 of
+  them top-two correct), no mismatch. Log: `logs/crosscheck.log`. To rerun (the clean-room files are
+  in `../verification/cleanroom` in the release repository; another location can be passed as a
+  fifth argument):
+
+  ```
+  lake build crosscheck
+  c++ -O2 -o bf2_fstate scripts/bf2_fstate.cpp
+  for s in 1 2 3 4 5; do python3 scripts/crosscheck.py .lake/build/bin/crosscheck ./bf2_fstate $s 20000; done
+  ```
+* `scripts/gen_validate.py [networks.txt]` regenerates `S13/Validate.lean` (same default location).
+* `bench/Bench.lean`: a native executable that runs the search and the check for given `N`, `L`.
+
+## License
+
+Code under the Apache License 2.0.

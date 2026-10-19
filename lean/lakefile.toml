@@ -1,0 +1,32 @@
+name = "S13"
+version = "0.1.0"
+defaultTargets = ["S13"]
+
+[leanOptions]
+pp.unicode.fun = true
+relaxedAutoImplicit = false
+weak.linter.style.header = false
+maxSynthPendingDepth = 3
+
+[[require]]
+name = "mathlib"
+scope = "leanprover-community"
+rev = "v4.35.0-rc3"
+
+# The computation (core Lean only), compiled to native code so that `native_decide` runs it natively.
+[[lean_lib]]
+name = "S13Comp"
+precompileModules = true
+
+[[lean_lib]]
+name = "S13"
+
+[[lean_exe]]
+name = "bench"
+root = "Bench"
+srcDir = "bench"
+
+[[lean_exe]]
+name = "crosscheck"
+root = "CrossCheck"
+srcDir = "crosscheck"

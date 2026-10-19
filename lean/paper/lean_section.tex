@@ -1,0 +1,102 @@
+% Section for the paper: the Lean formalization of Theorem 1.1.
+% Needs \usepackage{alltt}. Bibliography entries for [Lean4], [Mathlib], [HarRepo] and [LeanRepo] are in
+% lean_bib.tex (plus Har19, Har22, Knu98, Supp from the paper). Numbers come from logs/ in the Lean artifact.
+
+\section{A formal proof in Lean}\label{sec:lean}
+
+We formalized the proof of Theorem~\ref{thm:main} in Lean~4~\cite{Lean4} with Mathlib~\cite{Mathlib}. The
+formal proof is independent of Sections~\ref{sec:structure} and~\ref{sec:search}: its computation is method~A
+of Section~\ref{sec:verify}, and all of its pruning rules are proved in Lean. It assumes $S(11)\ge35$ as a
+hypothesis. The artifact~\cite{LeanRepo} contains the Lean sources, build instructions and logs.
+
+\subsection{The statement}
+The definitions behind the statement use only Lean's core library. A comparator on $n$ channels is a pair
+$i<j$ that puts the minimum on channel $i$ and the maximum on channel $j$, a network is a list of comparators,
+and a network sorts if its output is nondecreasing on every input vector of natural numbers:
+\begin{alltt}\small
+structure Comparator (n : Nat) where
+  i : Fin n
+  j : Fin n
+  lt : i < j
+
+def Comparator.apply (c : Comparator n) (v : Fin n \(\to\) Nat) : Fin n \(\to\) Nat :=
+  fun k => if k = c.i then min (v c.i) (v c.j)
+    else if k = c.j then max (v c.i) (v c.j) else v k
+
+abbrev Network (n : Nat) := List (Comparator n)
+
+def Network.eval (net : Network n) (v : Fin n \(\to\) Nat) : Fin n \(\to\) Nat :=
+  net.foldl (fun w c => c.apply w) v
+
+def Network.Sorts (net : Network n) : Prop :=
+  \(\forall\) v : Fin n \(\to\) Nat, \(\forall\) a b : Fin n, a \(\le\) b \(\to\) net.eval v a \(\le\) net.eval v b
+
+theorem main_theorem :
+    (\(\forall\) net : Network 11, net.Sorts \(\to\) 35 \(\le\) net.length) \(\to\)
+      \(\forall\) net : Network 13, net.Sorts \(\to\) 44 \(\le\) net.length
+\end{alltt}
+The formalization also proves the 0-1 principle, so the theorem holds equally with sorting defined on inputs in
+$\{0,1\}$. The checking function of Harder's certificate checker is verified in
+Isabelle/HOL~\cite{Har22,HarRepo}: if it accepts a certificate with width $n$ and bound $k$, then every list
+of comparators that sorts all sequences in $\{0,1\}^n$ has at least $k$ comparators, where a comparator is any
+pair $(i,j)$ of natural numbers and puts the minimum on $i$ and the maximum on $j$. Harder's
+certificate~\cite{Har19} is accepted with $n=11$ and $k=35$~\cite{Har22}. A network that sorts all inputs of
+natural numbers sorts all inputs in $\{0,1\}$, so this statement implies the hypothesis of
+\texttt{main\_theorem}.
+
+\subsection{What is proved}
+The formalization defines runs, $W(x,y)$, top-two correctness and $P(2,n)$ as in Section~\ref{sec:defs}, for
+networks whose comparators may put the maximum on either channel; the run $(x,y)$ has the value $n+1$ on input
+$x$, $n$ on input $y$, and $z$ on each other input $z$. Lean's kernel checks two results.
+\begin{enumerate}[label=(\roman*)]
+\item Lemma~\ref{lem:prune} for sorting networks in the form above: for $x\ne y$, deleting the comparators of
+$W(x,y)$ from a sorting network $T$ on $n+2$ channels leaves a network that sorts with respect to a fixed order
+of its outputs, and untangling it~\cite[Exercise~5.3.4--16]{Knu98} gives a sorting network on $n$ channels
+with $|T|-|W(x,y)|$ comparators.
+\item The reduction of $P(2,13)\ge9$ to a Boolean computation, described next.
+\end{enumerate}
+The computation works with the compressed states of method~A. A state assigns to each pair of channels
+$(p,q)$, $p\ne q$, the largest number of comparators met so far by a run that has the largest value on $p$ and
+the second largest on $q$, or nothing if no run is there. A network with $p_2\le L$ is a sequence of comparators
+that leads from the start state (cost $0$ at every pair) to a state with a single entry, and that entry is at
+most $L$. We prove three facts about the step from a state $f$ to the state $f'$ after a comparator:
+\begin{itemize}
+\item The potential $\Phi(f)=\sum_pR\bigl(\sum_{q\ne p}2^{f(p,q)}\bigr)$, where $R(s)$ is the least power of
+two that is at least $s$ ($R(0)=0$) and absent entries contribute $0$, satisfies $\Phi(f')\ge\Phi(f)$. At a
+goal $\Phi\le2^L$, so a state with $\Phi>2^L$ cannot reach a goal. This is the Kraft prune of method~A.
+\item Relabeling the channels by a permutation maps reachable goals to reachable goals with the same number of
+comparators.
+\item The two orientations of a comparator give states that differ by the transposition of its channels, so
+comparators with $\mathrm{lo}<\mathrm{hi}$ suffice.
+\end{itemize}
+From these, Lean proves: if a set $H$ of states contains no goal and, for every state in $H$ and every
+comparator with $\mathrm{lo}<\mathrm{hi}$, the next state is the same state, or has $\Phi>2^L$, or has a
+relabeling in $H$, then no state in $H$ reaches a goal. A search, whose code is not trusted, proposes $H$ for
+$N=13$ and $L=8$: $138{,}537$ states, each relabeled by colour refinement with ties broken by channel index.
+A checking function verifies these conditions for every state of $H$ and confirms that $H$ contains the
+start state. Lean proves that a successful check implies $P(2,13)\ge9$. With Lemma~\ref{lem:prune} and the
+hypothesis $S(11)\ge35$ this gives \texttt{main\_theorem}.
+
+\subsection{Trust base}
+The Boolean value of the check is computed by native code (the tactic \texttt{native\_decide}): Lean compiles
+the search and the check, runs them, and records the outcome as an axiom. The output of
+\texttt{\#print axioms main\_theorem} is
+\begin{alltt}\small
+[propext, Classical.choice, Quot.sound,
+ Sortnet.fullCheck_13_8._native.native_decide.ax_1_1]
+\end{alltt}
+where the last axiom states \texttt{decide (Comp.fullCheck 13 8 = true) = true}. The first three are the
+standard axioms of Lean's logic. Besides Lean's kernel, the proof therefore trusts the Lean compiler, the C
+compiler and the runtime on one computation, together with the hypothesis $S(11)\ge35$. The search and the
+relabeling heuristic only propose the set $H$: an error in their code or in its compilation could make the check
+fail, but not succeed wrongly. The result depends on the checking function, about $50$ lines of Lean, and on
+the parts of Lean's core library that it calls (arrays, natural numbers and hash sets). All other theorems,
+including Lemma~\ref{lem:prune}, depend only on the standard axioms.
+
+As a test, the same check reproduces $P(2,N)\ge\cl{\lg F(N)}$ for $3\le N\le12$, and explicit networks,
+checked by Lean's kernel without native code, give $P(2,N)\le\cl{\lg F(N)}$ for $3\le N\le13$ (theorem
+\texttt{p2\_values}). On $117{,}200$ random and exhaustively enumerated networks with $3\le N\le8$, the Lean
+definitions of $W(x,y)$, of top-two correctness and of the state step agree with the programs of method~A.
+
+The proof uses Lean~4 version \texttt{v4.35.0-rc3}. The computation for $N=13$, search and check together,
+took $357$~s and $2.0$~GB on one core of a shared AMD EPYC~9B45 machine.
